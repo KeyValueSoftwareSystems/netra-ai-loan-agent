@@ -26,7 +26,6 @@ from langgraph.types import Overwrite
 @after_agent
 def verify_agent_response(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
     """Verify if check_eligibility tool was called and AI response contains lakh figures."""
-    has_eligibility_check = False
     eligibility_output = None
     
     # Check if check_eligibility tool was called in this turn
@@ -58,7 +57,7 @@ def verify_agent_response(state: AgentState, runtime: Runtime) -> dict[str, Any]
     lakh_pattern = r'\d+\.?\d*\s*(?:lakh|lakhs|L\b)|\d{1,3}(?:[,.]?\d{2,3})+'
     contains_lakh = bool(re.search(lakh_pattern, ai_message, re.IGNORECASE))
     
-    if contains_lakh:
+    if contains_lakh and eligibility_output is not None:
         # Ask LLM to verify and correct the amounts
         verification_prompt = f"""
 You are verifying a loan agent's response for accuracy.

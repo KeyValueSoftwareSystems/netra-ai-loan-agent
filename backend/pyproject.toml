@@ -8,7 +8,7 @@ dependencies = [
     "fastapi[standard]>=0.129.0",
     "langchain>=1.2.10",
     "langchain-litellm>=0.5.1",
-    "langchain-openai>=1.1.9",
+    "langchain-openai>=1.1.14",
     "netra-sdk>=0.1.70",
     "pydantic-settings>=2.13.0",
 ]

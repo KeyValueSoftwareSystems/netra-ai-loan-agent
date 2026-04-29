@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -12,9 +12,16 @@ import {
   DialogDescription,
   DialogClose,
 } from "@/components/ui/dialog"
-import { MessageCircle, Send, Bot, Trash2, X } from "lucide-react"
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover"
+import { MessageCircle, Send, Bot, Trash2, X, ChevronDown, Check, Cpu } from "lucide-react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+
+const API_URL = "http://localhost:8000"
 
 type Message = {
   role: 'user' | 'ai'
@@ -25,7 +32,50 @@ export function AskAI() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  const [models, setModels] = useState<string[]>([])
+  const [currentModel, setCurrentModel] = useState<string>("")
+  const [modelSwitching, setModelSwitching] = useState(false)
+  const [modelPopoverOpen, setModelPopoverOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  const fetchModels = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/models`)
+      if (!res.ok) return
+      const data = await res.json()
+      setModels(data.models ?? [])
+      setCurrentModel(data.current ?? "")
+    } catch {
+      // backend not reachable yet
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchModels()
+  }, [fetchModels])
+
+  const switchModel = async (model: string) => {
+    if (model === currentModel) {
+      setModelPopoverOpen(false)
+      return
+    }
+    setModelSwitching(true)
+    try {
+      const res = await fetch(`${API_URL}/model`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      })
+      if (!res.ok) throw new Error("Failed to switch model")
+      const data = await res.json()
+      setCurrentModel(data.current)
+    } catch (err) {
+      console.error("Model switch error:", err)
+    } finally {
+      setModelSwitching(false)
+      setModelPopoverOpen(false)
+    }
+  }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -45,7 +95,7 @@ export function AskAI() {
 
     // API call to backend
     try {
-      const response = await fetch("http://localhost:8000/chat", {
+      const response = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -130,12 +180,49 @@ export function AskAI() {
               </p>
             </div>
           </div>
-          <DialogClose asChild>
-            <Button onClick={clearChat} variant="ghost" size="icon" className="h-8 w-8 rounded-full hover:bg-muted">
-              <X className="h-4 w-4" />
-              <span className="sr-only">Close</span>
-            </Button>
-          </DialogClose>
+          <div className="flex items-center gap-1">
+            {models.length > 0 && (
+              <Popover open={modelPopoverOpen} onOpenChange={setModelPopoverOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 text-xs font-normal px-2 border-border/60"
+                    disabled={modelSwitching}
+                  >
+                    <Cpu className="h-3 w-3 text-muted-foreground" />
+                    <span className="max-w-[100px] truncate">{currentModel || "model"}</span>
+                    <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-52 p-1">
+                  <div className="flex flex-col">
+                    {models.map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => switchModel(m)}
+                        disabled={modelSwitching}
+                        className={`flex items-center justify-between w-full rounded-sm px-2 py-1.5 text-xs cursor-pointer transition-colors ${
+                          m === currentModel
+                            ? "bg-primary/10 text-primary font-medium"
+                            : "hover:bg-muted text-foreground"
+                        }`}
+                      >
+                        <span>{m}</span>
+                        {m === currentModel && <Check className="h-3 w-3" />}
+                      </button>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+            <DialogClose asChild>
+              <Button onClick={clearChat} variant="ghost" size="icon" className="h-8 w-8 rounded-full hover:bg-muted">
+                <X className="h-4 w-4" />
+                <span className="sr-only">Close</span>
+              </Button>
+            </DialogClose>
+          </div>
         </div>
         
         <ScrollArea className="flex-1 p-4 h-0">

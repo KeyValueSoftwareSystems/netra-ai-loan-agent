@@ -18,6 +18,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {AskAI}   from "@/components/ai/askAI";
+import { EvaluationPanel } from "@/components/ai/evaluationPanel";
 
 const features = [
   {
@@ -355,7 +356,8 @@ export default function Home() {
             &copy; 2026 Meridian Bank. All rights reserved. Member FDIC.
           </p>
         </div>
-        <AskAI /> 
+        <AskAI />
+        <EvaluationPanel />
       </footer>
     </div>
   );

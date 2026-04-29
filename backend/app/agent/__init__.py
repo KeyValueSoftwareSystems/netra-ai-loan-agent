@@ -4,7 +4,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.runtime import Runtime
 from langchain.messages import AIMessage
 from typing import Any
-from agent.llm import llm
+import agent.llm as llm_module
 from agent.prompt import SYSTEM_PROMPT
 from agent.tools import (
     verify_identity,
@@ -21,7 +21,19 @@ from langgraph.runtime import Runtime
 from langchain.messages import AnyMessage
 import logging
 import re
+import threading
 from langgraph.types import Overwrite
+
+_TOOLS = [
+    verify_identity,
+    calculate_emi,
+    check_eligibility,
+    fetch_credit_report,
+    fetch_financial_profile,
+    generate_pre_approval,
+    search_loan_products,
+]
+
 
 @after_agent
 def verify_agent_response(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
@@ -29,18 +41,11 @@ def verify_agent_response(state: AgentState, runtime: Runtime) -> dict[str, Any]
     has_eligibility_check = False
     eligibility_output = None
     
-    # Check if check_eligibility tool was called in this turn
     for message in state["messages"]:
-        # Only AIMessage has tool_calls
-        # if isinstance(message, AIMessage) and hasattr(message, "tool_calls"):
-        #     for tool_call in message.tool_calls:
-        #         if tool_call.get("name") == "check_eligibility":
-        #             has_eligibility_check = True
         if hasattr(message, "type") and message.type == "tool" and hasattr(message, "name"):
             if message.name == "check_eligibility":
                 eligibility_output = message.content
     
-    # Get the last AI message
     if not state["messages"]:
         return None
     
@@ -49,17 +54,13 @@ def verify_agent_response(state: AgentState, runtime: Runtime) -> dict[str, Any]
         return None
     
     ai_message = last_message.content
-    # Handle case where content might not be a string
     if not isinstance(ai_message, str):
         return None
     
-    # Check if AI response contains lakh figures (e.g., "5 lakhs", "5L", "Rs. 5 lakh")
-    # or any large number (5+ digits), with or without comma/dot thousand separators
     lakh_pattern = r'\d+\.?\d*\s*(?:lakh|lakhs|L\b)|\d{1,3}(?:[,.]?\d{2,3})+'
     contains_lakh = bool(re.search(lakh_pattern, ai_message, re.IGNORECASE))
     
     if contains_lakh:
-        # Ask LLM to verify and correct the amounts
         verification_prompt = f"""
 You are verifying a loan agent's response for accuracy.
 
@@ -82,7 +83,7 @@ Return ONLY the corrected response text, nothing else.
 """
         
         try:
-            corrected_response = llm.invoke([{"role": "user", "content": verification_prompt}])
+            corrected_response = llm_module.llm.invoke([{"role": "user", "content": verification_prompt}])
             corrected_text = corrected_response.content if hasattr(corrected_response, "content") else str(corrected_response)
             
             logging.info(f"Amount verification - Original: {ai_message[:100]}... | Corrected: {corrected_text[:100]}...")
@@ -98,31 +99,41 @@ Return ONLY the corrected response text, nothing else.
     
     return None
 
-_agent = create_agent(
-    model=llm,
-    system_prompt=SYSTEM_PROMPT,
-    tools=[
-        verify_identity,
-        calculate_emi,
-        check_eligibility,
-        fetch_credit_report,
-        fetch_financial_profile,
-        generate_pre_approval,
-        search_loan_products
-    ],
-    checkpointer=InMemorySaver(),
-    middleware=[
-        verify_agent_response,
-        ModelRetryMiddleware(
-            max_delay=2,
-            max_retries=5
-        )
-    ]
-)
 
-# @agent(name="Nova")
+_agent_lock = threading.Lock()
+_agent_model_name: str | None = None
+_agent_instance = None
+
+
+def _build_agent():
+    return create_agent(
+        model=llm_module.llm,
+        system_prompt=SYSTEM_PROMPT,
+        tools=_TOOLS,
+        checkpointer=InMemorySaver(),
+        middleware=[
+            verify_agent_response,
+            ModelRetryMiddleware(max_delay=2, max_retries=5),
+        ],
+    )
+
+
+def _get_agent():
+    """Return the current agent, rebuilding if the model has changed."""
+    global _agent_instance, _agent_model_name
+    current = llm_module.get_current_model()
+    if _agent_instance is None or _agent_model_name != current:
+        with _agent_lock:
+            if _agent_instance is None or _agent_model_name != current:
+                logging.info(f"Building agent with model: {current}")
+                _agent_instance = _build_agent()
+                _agent_model_name = current
+    return _agent_instance
+
+
 def get_response(prompt: str, thread_id: str):
-    response = _agent.invoke({
+    current_agent = _get_agent()
+    response = current_agent.invoke({
         "messages": [
             {
                 "role": "user",
@@ -135,7 +146,6 @@ def get_response(prompt: str, thread_id: str):
         }
     })
 
-    # Pass the actual response messages which include middleware modifications
     trace_conversation(thread_id, response["messages"])
     return response["messages"][-1].text
 
@@ -143,7 +153,7 @@ def get_response(prompt: str, thread_id: str):
 def trace_conversation(thread_id: str, messages: list[AnyMessage] | None = None):
     # Use provided messages or fetch from state
     if messages is None:
-        messages = _agent.get_state({
+        messages = _get_agent().get_state({
             "configurable": {
                 "thread_id": thread_id
             }
@@ -191,16 +201,17 @@ def trace_conversation(thread_id: str, messages: list[AnyMessage] | None = None)
                         agent_span.set_attribute(f"gen_ai.completion.{i}.role", "assistant")
                         
                         with Netra.start_span("Agent Response", as_type=SpanType.GENERATION) as response_span:
-                            response_span.set_model("gpt-4.1")
+                            active_model = llm_module.get_current_model()
+                            response_span.set_model(active_model)
 
                             input_usage = UsageModel(
-                                model="gpt-4.1",
+                                model=active_model,
                                 units_used=message.usage_metadata["input_tokens"] if message.usage_metadata else 0,
                                 usage_type="input"
                             )
 
                             output_usage = UsageModel(
-                                model="gpt-4.1",
+                                model=active_model,
                                 units_used=message.usage_metadata["output_tokens"] if message.usage_metadata else 0,
                                 usage_type="output"
                             )

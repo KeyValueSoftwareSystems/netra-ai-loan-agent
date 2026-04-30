@@ -281,11 +281,20 @@ def get_active_loans(customer_id: str):
         return {"error": "An error occurred"}
 
 
+def _affordability_level(emi_to_income_pct: float) -> str:
+    if emi_to_income_pct <= 30:
+        return "comfortable"
+    if emi_to_income_pct <= 40:
+        return "stretching"
+    return "unaffordable"
+
+
 @tool
 def suggest_tenure(customer_id: str, product_id: str, requested_amount: int):
     """
-    Suggest the best loan tenure for a customer based on affordability. Computes EMI for every available
-    tenure on the given product and flags each as affordable (EMI <= 40% of monthly income).
+    Suggest the best loan tenure for a customer based on affordability. Computes EMI, total interest,
+    total cost (including processing fee), and affordability level for every available tenure on the
+    given product. Returns a ranked list (best option first) and a recommended tenure.
 
     Parameters:
         customer_id (str): The customer id of the customer
@@ -301,32 +310,45 @@ def suggest_tenure(customer_id: str, product_id: str, requested_amount: int):
         monthly_income = customer["financial_profile"]["monthly_income"]
         existing_emi = customer["financial_profile"]["existing_monthly_emi"]
         disposable = monthly_income - existing_emi
-        comfort_limit = disposable * 0.40
+        processing_fee = requested_amount * product["processing_fee_pct"] / 100
 
         tenure_options = []
-        recommended = None
 
         for tenure in sorted(product["available_tenures_months"]):
             emi = _compute_emi(requested_amount, product["interest_rate_annual_pct"], tenure)
             total_interest = emi * tenure - requested_amount
-            affordable = emi <= comfort_limit
+            total_cost = requested_amount + total_interest + processing_fee
+            emi_to_income_pct = round((emi / monthly_income) * 100, 2)
+            level = _affordability_level(emi_to_income_pct)
+
             tenure_options.append({
                 "tenure_months": tenure,
                 "emi": round(emi, 2),
                 "total_interest": round(total_interest, 2),
-                "emi_to_income_pct": round((emi / monthly_income) * 100, 2),
-                "affordable": affordable
+                "total_cost": round(total_cost, 2),
+                "processing_fee": round(processing_fee, 2),
+                "emi_to_income_pct": emi_to_income_pct,
+                "affordability_level": level,
             })
-            if affordable:
-                recommended = tenure
+
+        LEVEL_RANK = {"comfortable": 0, "stretching": 1, "unaffordable": 2}
+        tenure_options.sort(key=lambda t: (LEVEL_RANK[t["affordability_level"]], t["total_cost"]))
+
+        recommended = None
+        for opt in tenure_options:
+            if opt["affordability_level"] != "unaffordable":
+                recommended = opt["tenure_months"]
+                break
 
         return {
             "product_name": product["name"],
             "requested_amount": requested_amount,
             "monthly_income": monthly_income,
-            "comfort_emi_limit": round(comfort_limit, 2),
+            "existing_emi": existing_emi,
+            "disposable_income": disposable,
+            "processing_fee": round(processing_fee, 2),
             "tenure_options": tenure_options,
-            "recommended_tenure_months": recommended
+            "recommended_tenure_months": recommended,
         }
     except IndexError:
         logging.error(f"suggest_tenure - Not found: customer_id={customer_id}, product_id={product_id}")

@@ -165,5 +165,42 @@
                 "average_bank_balance_6m": 98000
             }
         }
+    ],
+    "branches": [
+        {
+            "branch_id": "BR-MUM-001",
+            "name": "Meridian Bank - Andheri West",
+            "city": "Mumbai",
+            "address": "Plot 42, Andheri West, Mumbai 400058",
+            "available_slots": ["10:00 AM", "11:00 AM", "2:00 PM", "3:00 PM", "4:00 PM"]
+        },
+        {
+            "branch_id": "BR-MUM-002",
+            "name": "Meridian Bank - Bandra",
+            "city": "Mumbai",
+            "address": "Hill Road, Bandra West, Mumbai 400050",
+            "available_slots": ["10:00 AM", "11:30 AM", "2:30 PM", "4:00 PM"]
+        },
+        {
+            "branch_id": "BR-BLR-001",
+            "name": "Meridian Bank - Koramangala",
+            "city": "Bangalore",
+            "address": "80 Feet Road, Koramangala, Bangalore 560034",
+            "available_slots": ["9:30 AM", "11:00 AM", "1:00 PM", "3:00 PM"]
+        },
+        {
+            "branch_id": "BR-DEL-001",
+            "name": "Meridian Bank - Connaught Place",
+            "city": "Delhi",
+            "address": "Block A, Connaught Place, New Delhi 110001",
+            "available_slots": ["10:00 AM", "12:00 PM", "2:00 PM", "4:00 PM"]
+        },
+        {
+            "branch_id": "BR-CHN-001",
+            "name": "Meridian Bank - T. Nagar",
+            "city": "Chennai",
+            "address": "Usman Road, T. Nagar, Chennai 600017",
+            "available_slots": ["10:00 AM", "11:30 AM", "2:00 PM", "3:30 PM"]
+        }
     ]
 }

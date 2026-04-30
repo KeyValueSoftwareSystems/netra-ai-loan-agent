@@ -5,6 +5,7 @@ import logging
 from netra.decorators import task
 from netra import Netra
 import math
+import uuid
 
 @tool
 # @task
@@ -243,3 +244,383 @@ def generate_pre_approval(customer_id: str, product_id: str, amount: int, annual
         return {
             "error": "An error occurred"
         }
+
+
+def _compute_emi(principal: int, annual_rate_pct: float, tenure_months: int) -> float:
+    r = annual_rate_pct / 12 / 100
+    return principal * r * ((1 + r) ** tenure_months) / ((1 + r) ** tenure_months - 1)
+
+
+@tool
+def get_active_loans(customer_id: str):
+    """
+    Retrieve a verified customer's active loans with a summary of total outstanding and total monthly EMI.
+
+    Parameters:
+        customer_id (str): The customer id of the customer
+    """
+
+    try:
+        db = get_db()
+        [customer] = [c for c in db["customers"] if c["customer_id"] == customer_id]
+        active_loans = customer["credit_report"]["active_loans"]
+
+        total_outstanding = sum(loan["outstanding"] for loan in active_loans)
+        total_monthly_emi = sum(loan["monthly_emi"] for loan in active_loans)
+
+        return {
+            "active_loans": active_loans,
+            "total_outstanding": total_outstanding,
+            "total_monthly_emi": total_monthly_emi
+        }
+    except IndexError:
+        logging.error(f"get_active_loans - Customer not found: customer_id={customer_id}")
+        return {"error": "Customer does not exist"}
+    except Exception as e:
+        logging.error(f"get_active_loans - Unexpected error: customer_id={customer_id}, error={e}")
+        return {"error": "An error occurred"}
+
+
+@tool
+def suggest_tenure(customer_id: str, product_id: str, requested_amount: int):
+    """
+    Suggest the best loan tenure for a customer based on affordability. Computes EMI for every available
+    tenure on the given product and flags each as affordable (EMI <= 40% of monthly income).
+
+    Parameters:
+        customer_id (str): The customer id of the customer
+        product_id (str): The product id of the loan product
+        requested_amount (int): The loan amount the customer wants
+    """
+
+    try:
+        db = get_db()
+        [customer] = [c for c in db["customers"] if c["customer_id"] == customer_id]
+        [product] = [p for p in db["products"] if p["product_id"] == product_id]
+
+        monthly_income = customer["financial_profile"]["monthly_income"]
+        existing_emi = customer["financial_profile"]["existing_monthly_emi"]
+        disposable = monthly_income - existing_emi
+        comfort_limit = disposable * 0.40
+
+        tenure_options = []
+        recommended = None
+
+        for tenure in sorted(product["available_tenures_months"]):
+            emi = _compute_emi(requested_amount, product["interest_rate_annual_pct"], tenure)
+            total_interest = emi * tenure - requested_amount
+            affordable = emi <= comfort_limit
+            tenure_options.append({
+                "tenure_months": tenure,
+                "emi": round(emi, 2),
+                "total_interest": round(total_interest, 2),
+                "emi_to_income_pct": round((emi / monthly_income) * 100, 2),
+                "affordable": affordable
+            })
+            if affordable:
+                recommended = tenure
+
+        return {
+            "product_name": product["name"],
+            "requested_amount": requested_amount,
+            "monthly_income": monthly_income,
+            "comfort_emi_limit": round(comfort_limit, 2),
+            "tenure_options": tenure_options,
+            "recommended_tenure_months": recommended
+        }
+    except IndexError:
+        logging.error(f"suggest_tenure - Not found: customer_id={customer_id}, product_id={product_id}")
+        return {"error": "Customer or product does not exist"}
+    except Exception as e:
+        logging.error(f"suggest_tenure - Unexpected error: customer_id={customer_id}, product_id={product_id}, error={e}")
+        return {"error": "An error occurred"}
+
+
+@tool
+def get_improvement_suggestions(customer_id: str, rejection_reasons: list[str]):
+    """
+    Provide actionable improvement tips after a loan rejection. Analyzes the customer's profile
+    against each rejection reason and returns specific steps they can take to become eligible.
+
+    Parameters:
+        customer_id (str): The customer id of the customer
+        rejection_reasons (list[str]): The list of rejection reasons returned by check_eligibility
+    """
+
+    try:
+        db = get_db()
+        [customer] = [c for c in db["customers"] if c["customer_id"] == customer_id]
+
+        credit = customer["credit_report"]
+        financial = customer["financial_profile"]
+        suggestions = []
+        max_eligible_amount = None
+
+        eligible_products = sorted(
+            [p for p in db["products"] if p["min_credit_score"] <= credit["credit_score"]],
+            key=lambda p: p["max_amount"],
+        )
+        if eligible_products:
+            max_eligible_amount = eligible_products[-1]["max_amount"]
+
+        for reason in rejection_reasons:
+            reason_lower = reason.lower()
+
+            if "debt-to-income" in reason_lower or "dti" in reason_lower:
+                suggestions.append({
+                    "issue": "High debt-to-income ratio",
+                    "tips": [
+                        f"Your existing monthly EMI is Rs.{financial['existing_monthly_emi']}. Paying off or reducing existing loans will improve your ratio.",
+                        "Consider consolidating multiple debts into a single lower-EMI loan.",
+                        f"Alternatively, request a lower loan amount to bring the ratio under 50%."
+                    ]
+                })
+
+            if "credit score" in reason_lower:
+                suggestions.append({
+                    "issue": "Credit score below minimum threshold",
+                    "tips": [
+                        f"Your current credit utilization is {credit['credit_utilization_pct']}%. Aim to bring it below 30%.",
+                        f"You have {credit['defaults_last_3_years']} default(s) in the last 3 years. Clearing outstanding defaults will significantly boost your score.",
+                        "Ensure all future payments are made on time for at least 6 months before re-applying."
+                    ]
+                })
+
+            if "maximum loanable amount" in reason_lower:
+                suggestions.append({
+                    "issue": "Requested amount exceeds maximum",
+                    "tips": [
+                        f"The maximum loanable amount you qualify for is Rs.{max_eligible_amount}." if max_eligible_amount else "You currently do not qualify for any loan products.",
+                        "Consider applying for a lower amount within the eligible range."
+                    ]
+                })
+
+            if "tenure" in reason_lower:
+                all_tenures = set()
+                for p in eligible_products:
+                    all_tenures.update(p["available_tenures_months"])
+                sorted_tenures = sorted(all_tenures)
+                suggestions.append({
+                    "issue": "Requested tenure not available",
+                    "tips": [
+                        f"Available tenures for your eligible products are: {', '.join(str(t) + ' months' for t in sorted_tenures)}.",
+                        "Try selecting one of the available tenure options."
+                    ]
+                })
+
+        return {
+            "suggestions": suggestions,
+            "max_eligible_amount": max_eligible_amount
+        }
+    except IndexError:
+        logging.error(f"get_improvement_suggestions - Customer not found: customer_id={customer_id}")
+        return {"error": "Customer does not exist"}
+    except Exception as e:
+        logging.error(f"get_improvement_suggestions - Unexpected error: customer_id={customer_id}, error={e}")
+        return {"error": "An error occurred"}
+
+
+@tool
+def calculate_prepayment(outstanding_amount: int, monthly_emi: int, annual_rate_pct: float, prepayment_amount: int, strategy: str):
+    """
+    Calculate the impact of a loan prepayment. Shows revised EMI or tenure and total interest saved.
+
+    Parameters:
+        outstanding_amount (int): Current outstanding loan principal
+        monthly_emi (int): Current monthly EMI being paid
+        annual_rate_pct (float): Annual interest rate as a percentage
+        prepayment_amount (int): The lump-sum amount the customer wants to prepay
+        strategy (str): Either "reduce_emi" (keep tenure, lower EMI) or "reduce_tenure" (keep EMI, shorter tenure)
+    """
+
+    try:
+        if prepayment_amount >= outstanding_amount:
+            return {
+                "message": f"A prepayment of Rs.{prepayment_amount} covers the full outstanding of Rs.{outstanding_amount}. The loan can be closed entirely.",
+                "interest_saved": 0,
+                "new_outstanding": 0
+            }
+
+        r = annual_rate_pct / 12 / 100
+        new_outstanding = outstanding_amount - prepayment_amount
+
+        original_remaining = math.log(monthly_emi / (monthly_emi - r * outstanding_amount)) / math.log(1 + r)
+        original_remaining = math.ceil(original_remaining)
+        original_total_interest = monthly_emi * original_remaining - outstanding_amount
+
+        if strategy == "reduce_tenure":
+            new_remaining = math.log(monthly_emi / (monthly_emi - r * new_outstanding)) / math.log(1 + r)
+            new_remaining = math.ceil(new_remaining)
+            new_total_interest = monthly_emi * new_remaining - new_outstanding
+
+            return {
+                "strategy": "reduce_tenure",
+                "new_outstanding": new_outstanding,
+                "monthly_emi": monthly_emi,
+                "original_remaining_months": original_remaining,
+                "new_remaining_months": new_remaining,
+                "months_saved": original_remaining - new_remaining,
+                "interest_saved": round(original_total_interest - new_total_interest, 2)
+            }
+        else:
+            new_emi = _compute_emi(new_outstanding, annual_rate_pct, original_remaining)
+            new_total_interest = new_emi * original_remaining - new_outstanding
+
+            return {
+                "strategy": "reduce_emi",
+                "new_outstanding": new_outstanding,
+                "original_emi": monthly_emi,
+                "new_emi": round(new_emi, 2),
+                "emi_reduction": round(monthly_emi - new_emi, 2),
+                "remaining_months": original_remaining,
+                "interest_saved": round(original_total_interest - new_total_interest, 2)
+            }
+    except (ValueError, ZeroDivisionError) as e:
+        logging.error(f"calculate_prepayment - Math error: outstanding={outstanding_amount}, emi={monthly_emi}, rate={annual_rate_pct}, prepay={prepayment_amount}, error={e}")
+        return {"error": "Could not compute prepayment. Please verify the loan details."}
+    except Exception as e:
+        logging.error(f"calculate_prepayment - Unexpected error: error={e}")
+        return {"error": "An error occurred"}
+
+
+_DOCUMENT_CHECKLISTS = {
+    "salaried": [
+        {"name": "PAN Card", "description": "Original and photocopy"},
+        {"name": "Aadhaar Card", "description": "Original and photocopy"},
+        {"name": "Salary Slips", "description": "Last 3 months salary slips"},
+        {"name": "Form 16", "description": "Latest Form 16 from employer"},
+        {"name": "Bank Statements", "description": "Last 6 months bank statements"},
+        {"name": "Employment Letter", "description": "Current employment confirmation letter"},
+        {"name": "Passport-size Photos", "description": "2 recent passport-size photographs"},
+        {"name": "Address Proof", "description": "Utility bill or rental agreement (not older than 3 months)"},
+    ],
+    "self_employed": [
+        {"name": "PAN Card", "description": "Original and photocopy"},
+        {"name": "Aadhaar Card", "description": "Original and photocopy"},
+        {"name": "ITR Returns", "description": "Last 2 years Income Tax Returns"},
+        {"name": "Business Registration", "description": "Certificate of business registration or incorporation"},
+        {"name": "Bank Statements", "description": "Last 12 months bank statements (business and personal)"},
+        {"name": "Profit & Loss Statement", "description": "Audited P&L for the last 2 financial years"},
+        {"name": "Passport-size Photos", "description": "2 recent passport-size photographs"},
+        {"name": "Address Proof", "description": "Utility bill or rental agreement (not older than 3 months)"},
+    ],
+    "business": [
+        {"name": "PAN Card", "description": "Original and photocopy (personal and business)"},
+        {"name": "Aadhaar Card", "description": "Original and photocopy"},
+        {"name": "ITR Returns", "description": "Last 2 years Income Tax Returns"},
+        {"name": "GST Returns", "description": "Last 12 months GST returns"},
+        {"name": "Bank Statements", "description": "Last 12 months bank statements"},
+        {"name": "Business Proof", "description": "GST certificate, trade licence, or Udyam registration"},
+        {"name": "Audited Financials", "description": "Balance sheet and P&L for last 2 financial years"},
+        {"name": "Passport-size Photos", "description": "2 recent passport-size photographs"},
+        {"name": "Address Proof", "description": "Utility bill or rental agreement (not older than 3 months)"},
+    ],
+}
+
+
+@tool
+def get_document_checklist(employment_type: str, product_id: str):
+    """
+    Generate a personalized document checklist based on the customer's employment type and selected loan product.
+    Should be called after a pre-approval is generated.
+
+    Parameters:
+        employment_type (str): Type of employment - "salaried", "self_employed", or "business"
+        product_id (str): The product id of the selected loan product
+    """
+
+    try:
+        db = get_db()
+        [product] = [p for p in db["products"] if p["product_id"] == product_id]
+
+        key = employment_type.lower().replace("-", "_").replace(" ", "_")
+        documents = _DOCUMENT_CHECKLISTS.get(key, _DOCUMENT_CHECKLISTS["salaried"])
+
+        return {
+            "employment_type": employment_type,
+            "product_name": product["name"],
+            "documents": documents
+        }
+    except IndexError:
+        logging.error(f"get_document_checklist - Product not found: product_id={product_id}")
+        return {"error": "Product does not exist"}
+    except Exception as e:
+        logging.error(f"get_document_checklist - Unexpected error: employment_type={employment_type}, product_id={product_id}, error={e}")
+        return {"error": "An error occurred"}
+
+
+@tool
+def find_nearest_branch(city: str):
+    """
+    Find Meridian Bank branches in a given city with available appointment slots.
+
+    Parameters:
+        city (str): The city to search for branches in
+    """
+
+    try:
+        db = get_db()
+        branches = [b for b in db.get("branches", []) if b["city"].lower() == city.lower()]
+
+        if not branches:
+            return {
+                "branches": [],
+                "message": f"No Meridian Bank branches found in {city}. Available cities: {', '.join(sorted(set(b['city'] for b in db.get('branches', []))))}"
+            }
+
+        return {
+            "branches": [
+                {
+                    "branch_id": b["branch_id"],
+                    "name": b["name"],
+                    "address": b["address"],
+                    "available_slots": b["available_slots"]
+                }
+                for b in branches
+            ]
+        }
+    except Exception as e:
+        logging.error(f"find_nearest_branch - Unexpected error: city={city}, error={e}")
+        return {"error": "An error occurred"}
+
+
+@tool
+def schedule_appointment(customer_id: str, branch_id: str, preferred_date: str, time_slot: str):
+    """
+    Schedule a branch visit appointment for a customer. Returns a booking confirmation.
+
+    Parameters:
+        customer_id (str): The customer id of the customer
+        branch_id (str): The branch id from find_nearest_branch results
+        preferred_date (str): Preferred date in YYYY-MM-DD format
+        time_slot (str): One of the available time slots from find_nearest_branch results
+    """
+
+    try:
+        db = get_db()
+        [customer] = [c for c in db["customers"] if c["customer_id"] == customer_id]
+        [branch] = [b for b in db.get("branches", []) if b["branch_id"] == branch_id]
+
+        if time_slot not in branch["available_slots"]:
+            return {
+                "error": f"Time slot '{time_slot}' is not available at this branch. Available slots: {', '.join(branch['available_slots'])}"
+            }
+
+        booking_id = f"BK-{date.today().year}-{uuid.uuid4().hex[:5].upper()}"
+
+        return {
+            "booking_id": booking_id,
+            "customer_name": customer["full_name"],
+            "branch_name": branch["name"],
+            "branch_address": branch["address"],
+            "date": preferred_date,
+            "time_slot": time_slot,
+            "status": "confirmed",
+            "message": f"Your appointment at {branch['name']} on {preferred_date} at {time_slot} has been confirmed. Please carry all required documents."
+        }
+    except IndexError:
+        logging.error(f"schedule_appointment - Not found: customer_id={customer_id}, branch_id={branch_id}")
+        return {"error": "Customer or branch does not exist"}
+    except Exception as e:
+        logging.error(f"schedule_appointment - Unexpected error: customer_id={customer_id}, branch_id={branch_id}, error={e}")
+        return {"error": "An error occurred"}

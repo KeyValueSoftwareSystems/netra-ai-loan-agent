@@ -13,7 +13,14 @@ from agent.tools import (
     fetch_credit_report,
     fetch_financial_profile,
     generate_pre_approval,
-    search_loan_products
+    search_loan_products,
+    get_active_loans,
+    suggest_tenure,
+    get_improvement_suggestions,
+    calculate_prepayment,
+    get_document_checklist,
+    find_nearest_branch,
+    schedule_appointment,
 )
 from netra.decorators import agent
 from netra import Netra, ConversationType, SpanType, UsageModel
@@ -26,21 +33,16 @@ from langgraph.types import Overwrite
 @after_agent
 def verify_agent_response(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
     """Verify if check_eligibility tool was called and AI response contains lakh figures."""
-    has_eligibility_check = False
     eligibility_output = None
     
-    # Check if check_eligibility tool was called in this turn
     for message in state["messages"]:
-        # Only AIMessage has tool_calls
-        # if isinstance(message, AIMessage) and hasattr(message, "tool_calls"):
-        #     for tool_call in message.tool_calls:
-        #         if tool_call.get("name") == "check_eligibility":
-        #             has_eligibility_check = True
         if hasattr(message, "type") and message.type == "tool" and hasattr(message, "name"):
             if message.name == "check_eligibility":
                 eligibility_output = message.content
     
-    # Get the last AI message
+    if eligibility_output is None:
+        return None
+    
     if not state["messages"]:
         return None
     
@@ -49,13 +51,10 @@ def verify_agent_response(state: AgentState, runtime: Runtime) -> dict[str, Any]
         return None
     
     ai_message = last_message.content
-    # Handle case where content might not be a string
     if not isinstance(ai_message, str):
         return None
     
-    # Check if AI response contains lakh figures (e.g., "5 lakhs", "5L", "Rs. 5 lakh")
-    # or any large number (5+ digits), with or without comma/dot thousand separators
-    lakh_pattern = r'\d+\.?\d*\s*(?:lakh|lakhs|L\b)|\d{1,3}(?:[,.]?\d{2,3})+'
+    lakh_pattern = r'\d+\.?\d*\s*(?:lakh|lakhs|L\b)'
     contains_lakh = bool(re.search(lakh_pattern, ai_message, re.IGNORECASE))
     
     if contains_lakh:
@@ -108,7 +107,14 @@ _agent = create_agent(
         fetch_credit_report,
         fetch_financial_profile,
         generate_pre_approval,
-        search_loan_products
+        search_loan_products,
+        get_active_loans,
+        suggest_tenure,
+        get_improvement_suggestions,
+        calculate_prepayment,
+        get_document_checklist,
+        find_nearest_branch,
+        schedule_appointment,
     ],
     checkpointer=InMemorySaver(),
     middleware=[

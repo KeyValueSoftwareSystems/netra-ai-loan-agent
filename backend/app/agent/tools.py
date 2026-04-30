@@ -387,12 +387,18 @@ def get_improvement_suggestions(customer_id: str, rejection_reasons: list[str]):
                 })
 
             if "maximum loanable amount" in reason_lower:
+                product_names = ", ".join(p["name"] for p in eligible_products) if eligible_products else "none"
+                tips = []
+                if max_eligible_amount:
+                    tips.append(f"The maximum loanable amount across your eligible products ({product_names}) is Rs.{max_eligible_amount}.")
+                    tips.append(f"Consider applying for Rs.{max_eligible_amount} or less to proceed with your application.")
+                else:
+                    tips.append("You currently do not qualify for any loan products based on your credit score.")
+                if credit["credit_score"] < 750:
+                    tips.append(f"Improving your credit score (currently {credit['credit_score']}) above 750 may unlock products with higher limits.")
                 suggestions.append({
                     "issue": "Requested amount exceeds maximum",
-                    "tips": [
-                        f"The maximum loanable amount you qualify for is Rs.{max_eligible_amount}." if max_eligible_amount else "You currently do not qualify for any loan products.",
-                        "Consider applying for a lower amount within the eligible range."
-                    ]
+                    "tips": tips
                 })
 
             if "tenure" in reason_lower:

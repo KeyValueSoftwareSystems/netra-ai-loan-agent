@@ -17,7 +17,7 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from "@/components/ui/popover"
-import { MessageCircle, Send, Bot, Trash2, X, ChevronDown, Check, Cpu } from "lucide-react"
+import { MessageCircle, Send, Bot, Trash2, X, ChevronDown, Check, Cpu, ChevronRight } from "lucide-react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -28,34 +28,60 @@ type Message = {
   content: string
 }
 
+type ProviderInfo = {
+  id: string
+  name: string
+  models: string[]
+}
+
+const PROVIDER_ICONS: Record<string, string> = {
+  openai: "O",
+  anthropic: "A",
+  google: "G",
+  litellm: "L",
+}
+
+const PROVIDER_COLORS: Record<string, string> = {
+  openai: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  anthropic: "bg-orange-500/15 text-orange-400 border-orange-500/30",
+  google: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  litellm: "bg-purple-500/15 text-purple-400 border-purple-500/30",
+}
+
 export function AskAI() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
-  const [models, setModels] = useState<string[]>([])
+  const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [currentProvider, setCurrentProvider] = useState<string>("")
   const [currentModel, setCurrentModel] = useState<string>("")
   const [modelSwitching, setModelSwitching] = useState(false)
   const [modelPopoverOpen, setModelPopoverOpen] = useState(false)
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const fetchModels = useCallback(async () => {
+  const fetchProviders = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/models`)
+      const res = await fetch(`${API_URL}/providers`)
       if (!res.ok) return
       const data = await res.json()
-      setModels(data.models ?? [])
-      setCurrentModel(data.current ?? "")
+      setProviders(data.providers ?? [])
+      setCurrentProvider(data.currentProvider ?? "")
+      setCurrentModel(data.currentModel ?? "")
+      if (data.currentProvider) {
+        setExpandedProvider(data.currentProvider)
+      }
     } catch {
       // backend not reachable yet
     }
   }, [])
 
   useEffect(() => {
-    fetchModels()
-  }, [fetchModels])
+    fetchProviders()
+  }, [fetchProviders])
 
-  const switchModel = async (model: string) => {
-    if (model === currentModel) {
+  const switchModel = async (model: string, provider: string) => {
+    if (model === currentModel && provider === currentProvider) {
       setModelPopoverOpen(false)
       return
     }
@@ -64,11 +90,12 @@ export function AskAI() {
       const res = await fetch(`${API_URL}/model`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model }),
+        body: JSON.stringify({ model, provider }),
       })
       if (!res.ok) throw new Error("Failed to switch model")
       const data = await res.json()
       setCurrentModel(data.current)
+      setCurrentProvider(data.provider)
     } catch (err) {
       console.error("Model switch error:", err)
     } finally {
@@ -93,7 +120,6 @@ export function AskAI() {
     setInput("")
     setLoading(true)
 
-    // API call to backend
     try {
       const response = await fetch(`${API_URL}/chat`, {
         method: "POST",
@@ -112,7 +138,6 @@ export function AskAI() {
 
       const data = await response.json()
       
-      // Store thread_id if available
       if (data.thread_id) {
         localStorage.setItem("thread_id", data.thread_id)
       }
@@ -145,6 +170,8 @@ export function AskAI() {
     setMessages([])
     localStorage.removeItem("thread_id")
   }
+
+  const activeProvider = providers.find((p) => p.id === currentProvider)
 
   return (
     <Dialog onOpenChange={(open) => {
@@ -181,37 +208,70 @@ export function AskAI() {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            {models.length > 0 && (
+            {providers.length > 0 && (
               <Popover open={modelPopoverOpen} onOpenChange={setModelPopoverOpen}>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 gap-1 text-xs font-normal px-2 border-border/60"
+                    className="h-7 gap-1.5 text-xs font-normal px-2 border-border/60"
                     disabled={modelSwitching}
                   >
+                    {activeProvider && (
+                      <span className={`inline-flex items-center justify-center h-4 w-4 rounded text-[9px] font-bold border ${PROVIDER_COLORS[activeProvider.id] ?? "bg-muted text-muted-foreground border-border"}`}>
+                        {PROVIDER_ICONS[activeProvider.id] ?? "?"}
+                      </span>
+                    )}
                     <Cpu className="h-3 w-3 text-muted-foreground" />
                     <span className="max-w-[100px] truncate">{currentModel || "model"}</span>
                     <ChevronDown className="h-3 w-3 text-muted-foreground" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent align="end" className="w-52 p-1">
-                  <div className="flex flex-col">
-                    {models.map((m) => (
-                      <button
-                        key={m}
-                        onClick={() => switchModel(m)}
-                        disabled={modelSwitching}
-                        className={`flex items-center justify-between w-full rounded-sm px-2 py-1.5 text-xs cursor-pointer transition-colors ${
-                          m === currentModel
-                            ? "bg-primary/10 text-primary font-medium"
-                            : "hover:bg-muted text-foreground"
-                        }`}
-                      >
-                        <span>{m}</span>
-                        {m === currentModel && <Check className="h-3 w-3" />}
-                      </button>
-                    ))}
+                <PopoverContent align="end" className="w-64 p-1.5">
+                  <div className="flex flex-col gap-0.5">
+                    {providers.map((provider) => {
+                      const isExpanded = expandedProvider === provider.id
+                      const isActive = provider.id === currentProvider
+                      return (
+                        <div key={provider.id}>
+                          <button
+                            onClick={() => setExpandedProvider(isExpanded ? null : provider.id)}
+                            className={`flex items-center gap-2 w-full rounded-md px-2 py-2 text-xs cursor-pointer transition-colors ${
+                              isActive ? "bg-muted/60" : "hover:bg-muted/40"
+                            }`}
+                          >
+                            <span className={`inline-flex items-center justify-center h-5 w-5 rounded text-[10px] font-bold border ${PROVIDER_COLORS[provider.id] ?? "bg-muted text-muted-foreground border-border"}`}>
+                              {PROVIDER_ICONS[provider.id] ?? "?"}
+                            </span>
+                            <span className="font-medium flex-1 text-left">{provider.name}</span>
+                            <span className="text-[10px] text-muted-foreground tabular-nums">{provider.models.length} models</span>
+                            <ChevronRight className={`h-3 w-3 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                          </button>
+                          {isExpanded && (
+                            <div className="ml-3 pl-4 border-l border-border/50 mt-0.5 mb-1 flex flex-col gap-0.5">
+                              {provider.models.map((m) => {
+                                const isCurrentModel = m === currentModel && provider.id === currentProvider
+                                return (
+                                  <button
+                                    key={m}
+                                    onClick={() => switchModel(m, provider.id)}
+                                    disabled={modelSwitching}
+                                    className={`flex items-center justify-between w-full rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer transition-colors ${
+                                      isCurrentModel
+                                        ? "bg-primary/10 text-primary font-medium"
+                                        : "hover:bg-muted text-foreground"
+                                    }`}
+                                  >
+                                    <span className="font-mono">{m}</span>
+                                    {isCurrentModel && <Check className="h-3 w-3 shrink-0" />}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 </PopoverContent>
               </Popover>

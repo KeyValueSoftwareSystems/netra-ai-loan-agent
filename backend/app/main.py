@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from schema.chat_request import ChatRequest
 from agent import get_response
-from agent.llm import get_available_models, get_current_model, set_model
+from agent.llm import get_available_models, get_available_providers, get_current_model, get_current_provider, set_model
 import logging
 import uuid
 import uvicorn
@@ -53,9 +53,19 @@ app.add_middleware(
 
 class ModelRequest(BaseModel):
     model: str
+    provider: str | None = None
 
 class BatchSimulationRequest(BaseModel):
     models: list[str]
+
+
+@app.get("/providers")
+def list_providers():
+    return {
+        "providers": get_available_providers(),
+        "currentProvider": get_current_provider(),
+        "currentModel": get_current_model(),
+    }
 
 
 @app.get("/models")
@@ -69,9 +79,9 @@ def list_models():
 @app.put("/model")
 def switch_model(req: ModelRequest, response: Response):
     try:
-        set_model(req.model)
-        logging.info(f"Model switched to: {req.model}")
-        return {"current": get_current_model()}
+        set_model(req.model, req.provider)
+        logging.info(f"Model switched to: {req.model} (provider: {get_current_provider()})")
+        return {"current": get_current_model(), "provider": get_current_provider()}
     except ValueError as e:
         response.status_code = 400
         return {"error": str(e)}

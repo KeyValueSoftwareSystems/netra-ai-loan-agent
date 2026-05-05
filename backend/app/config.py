@@ -9,14 +9,22 @@ class Environment(BaseSettings):
 
     LITELLM_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    GOOGLE_API_KEY: str | None = None
 
     @model_validator(mode="after")
     def llm_api_key_validator(self) -> 'Environment':
-        if not self.LITELLM_API_KEY and not self.OPENAI_API_KEY:
-            raise AttributeError("LLM keys must be set")
-        elif self.LITELLM_API_KEY and self.OPENAI_API_KEY:
-            raise AttributeError("More than one LLM api key has been set. Comment one out.")
-
+        has_any = (
+            self.OPENAI_API_KEY
+            or self.ANTHROPIC_API_KEY
+            or self.GOOGLE_API_KEY
+            or self.LITELLM_API_KEY
+        )
+        if not has_any:
+            raise AttributeError(
+                "At least one LLM API key must be set "
+                "(OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, or LITELLM_API_KEY)"
+            )
         return self
     
 env = Environment() #type: ignore

@@ -7,6 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.129.0",
     "langchain>=1.2.10",
+    "langchain-anthropic>=0.3.0",
+    "langchain-google-genai>=2.1.0",
     "langchain-litellm>=0.5.1",
     "langchain-openai>=1.1.9",
     "netra-sdk>=0.1.70",

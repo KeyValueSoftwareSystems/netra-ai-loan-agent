@@ -243,3 +243,20 @@ def generate_pre_approval(customer_id: str, product_id: str, amount: int, annual
         return {
             "error": "An error occurred"
         }
+    
+@tool
+def parse_file(filename:str, mime_type:str, data:str):
+    """
+    IMPORTANT: DO NOT PASSS THIS TOOL TO AGENT YET.
+    Parse the file contents. Not yet implemented.
+
+    Parameters:
+        filename (str): Name of the file
+        mime_type (str): Mime type of the file
+        data (int): Data inside the file. TODO: implement parsing images, documents etc.
+    """
+    return {
+        "filename": filename,
+        "mime_type": mime_type,
+        "fileInformation": ""
+    }

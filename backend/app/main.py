@@ -51,12 +51,14 @@ app.add_middleware(
 
 @app.post("/chat")
 def chat(chat: ChatRequest, response: Response):
+    # IMPORTANT this method does not currently actually read the file, now it only infers from the file and its metadata.
+    # TODO: implement file reading and parsing
     try:
         thread_id = chat.thread_id or uuid.uuid4().hex
         Netra.set_session_id(thread_id)
 
         return {
-            "response": get_response(chat.prompt, thread_id),
+            "response": get_response(chat.prompt, thread_id, [x.model_dump() for x in chat.files]) if chat.files and len(chat.files) > 0 else get_response(chat.prompt, thread_id),
             "thread_id": thread_id
         }
     except Exception as e:

@@ -143,7 +143,7 @@ def get_response(prompt: str, thread_id: str, files: list[dict[str, str]] = []):
         for file in files:
             messages.append({
                 "role": "user",
-                "content": f"I have uploaded a file named {file["filename"]} with mimetype {file["mime_type"]}"
+                "content": f"I have uploaded a file named {file['filename']} with mimetype {file['mime_type']}"
             })
 
     response = _agent.invoke({

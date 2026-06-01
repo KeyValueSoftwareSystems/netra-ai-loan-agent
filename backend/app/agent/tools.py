@@ -253,7 +253,7 @@ def parse_file(filename:str, mime_type:str, data:str):
     Parameters:
         filename (str): Name of the file
         mime_type (str): Mime type of the file
-        data (int): Data inside the file. TODO: implement parsing images, documents etc.
+        data (str): Data inside the file. TODO: implement parsing images, documents etc.
     """
     return {
         "filename": filename,

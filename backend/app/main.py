@@ -57,8 +57,12 @@ def chat(chat: ChatRequest, response: Response):
         thread_id = chat.thread_id or uuid.uuid4().hex
         Netra.set_session_id(thread_id)
 
+        files = []
+        if chat.files and len(chat.files) > 0:
+            files = [x.model_dump() for x in chat.files]
+
         return {
-            "response": get_response(chat.prompt, thread_id, [x.model_dump() for x in chat.files]) if chat.files and len(chat.files) > 0 else get_response(chat.prompt, thread_id),
+            "response": get_response(chat.prompt, thread_id, files),
             "thread_id": thread_id
         }
     except Exception as e:

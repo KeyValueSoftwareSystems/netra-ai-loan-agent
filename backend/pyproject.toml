@@ -11,6 +11,6 @@ dependencies = [
     "langchain-litellm>=0.5.1",
     "langchain-openai>=1.1.9",
     "netra-sdk==0.1.95",
-    "pydantic-settings>=2.13.0",
+    "pydantic-settings>=2.14.2",
     "python-dotenv>=1.2.1",
 ]

@@ -6,6 +6,8 @@ from netra.decorators import task
 from netra import Netra
 import math
 
+from config import tool_drift_enabled
+
 @tool
 # @task
 def verify_identity(identifier_type: str, identifier_value: str):
@@ -58,8 +60,10 @@ def fetch_credit_report(customer_id: str):
     """
 
     try:
+        logging.info(f"fetch_credit_report - Fetching credit report for customer_id={customer_id}")
         db = get_db()
         [customer] = [customer for customer in db["customers"] if customer["customer_id"] == customer_id]
+        logging.info(f"fetch_credit_report - Successfully fetched credit report for customer_id={customer_id}")
         return customer["credit_report"]
     except IndexError as e:
         logging.error(f"fetch_credit_report - Customer not found: customer_id={customer_id}, error={e}")
@@ -83,8 +87,10 @@ def fetch_financial_profile(customer_id: str):
     """
 
     try:
+        logging.info(f"fetch_financial_profile - Fetching financial profile for customer_id={customer_id}")
         db = get_db()
         [customer] = [customer for customer in db["customers"] if customer["customer_id"] == customer_id]
+        logging.info(f"fetch_financial_profile - Successfully fetched financial profile for customer_id={customer_id}")
         return customer["financial_profile"]
     except IndexError as e:
         logging.error(f"fetch_financial_profile - Customer not found: customer_id={customer_id}, error={e}")
@@ -243,9 +249,10 @@ def generate_pre_approval(customer_id: str, product_id: str, amount: int, annual
         return {
             "error": "An error occurred"
         }
-    
+
+
 @tool
-def parse_file(filename:str, mime_type:str, data:str):
+def parse_file(filename: str, mime_type: str, data: str):
     """
     IMPORTANT: DO NOT PASSS THIS TOOL TO AGENT YET.
     Parse the file contents. Not yet implemented.
@@ -260,3 +267,28 @@ def parse_file(filename:str, mime_type:str, data:str):
         "mime_type": mime_type,
         "fileInformation": ""
     }
+
+
+def get_agent_tools(*, tool_drift: bool | None = None) -> list:
+    """Return tools for the Nova agent. When ``tool_drift`` is true, order favors EMI/product tools earlier (model sees a different default bias)."""
+    drift = tool_drift_enabled() if tool_drift is None else tool_drift
+
+    strict_order = [
+        verify_identity,
+        fetch_credit_report,
+        fetch_financial_profile,
+        search_loan_products,
+        check_eligibility,
+        calculate_emi,
+        generate_pre_approval,
+    ]
+    drift_order = [
+        verify_identity,
+        calculate_emi,
+        search_loan_products,
+        fetch_credit_report,
+        fetch_financial_profile,
+        check_eligibility,
+        generate_pre_approval,
+    ]
+    return list(drift_order if drift else strict_order)

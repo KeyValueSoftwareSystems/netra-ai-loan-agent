@@ -9,6 +9,8 @@ class Environment(BaseSettings):
 
     LITELLM_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
+    # When true (1/true/yes), Nova uses a relaxed tool-order prompt and reordered tools for trace diversity.
+    TOOL_DRIFT: str = Field(default="")
 
     @model_validator(mode="after")
     def llm_api_key_validator(self) -> 'Environment':
@@ -18,5 +20,10 @@ class Environment(BaseSettings):
             raise AttributeError("More than one LLM api key has been set. Comment one out.")
 
         return self
-    
+
+
 env = Environment() #type: ignore
+
+
+def tool_drift_enabled() -> bool:
+    return env.TOOL_DRIFT.strip().lower() in ("1", "true", "yes")

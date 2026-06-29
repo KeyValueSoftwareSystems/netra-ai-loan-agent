@@ -8,23 +8,21 @@ import uvicorn
 from config import env
 from contextlib import asynccontextmanager
 from db import init_db
+from logger import setup_logging
 from netra import Netra
 from netra.version import __version__ as netra_version
 from netra.instrumentation.instruments import InstrumentSet
 from services.simulation import run_simulation
 from services.evaluation import run_evaluation
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+setup_logging()
 
 Netra.init(
     app_name="Nova Agent",
     environment=env.ENVIRONMENT,
     headers=f"x-api-key={env.NETRA_API_KEY}",
     debug_mode=True,
-    block_instruments={InstrumentSet.FASTAPI, InstrumentSet.LANGCHAIN, InstrumentSet.LITELLM, InstrumentSet.OPENAI, InstrumentSet.REQUESTS, InstrumentSet.HTTPX} #type: ignore
+    block_instruments={InstrumentSet.FASTAPI, InstrumentSet.LANGCHAIN, InstrumentSet.LITELLM, InstrumentSet.OPENAI, InstrumentSet.REQUESTS} #type: ignore
 )
 
 Netra.set_tenant_id("Nova")
@@ -60,10 +58,17 @@ def chat(chat: ChatRequest, response: Response):
         files = []
         if chat.files and len(chat.files) > 0:
             files = [x.model_dump() for x in chat.files]
+            logging.info(f"Document upload - thread_id={thread_id}, files={[f.filename for f in chat.files]}")
 
         return {
-            "response": get_response(chat.prompt, thread_id, files),
-            "thread_id": thread_id
+            "response": get_response(
+                chat.prompt,
+                thread_id,
+                files,
+                scenario_intent=chat.scenario_intent,
+                scenario_sequence=chat.scenario_sequence,
+            ),
+            "thread_id": thread_id,
         }
     except Exception as e:
         logging.error(msg=e)

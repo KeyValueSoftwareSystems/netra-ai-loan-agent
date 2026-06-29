@@ -2,23 +2,13 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import after_agent, AgentState, ModelRetryMiddleware
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.runtime import Runtime
-from langchain.messages import AIMessage
+from langchain.messages import AIMessage, AnyMessage
 from typing import Any
 from agent.llm import llm
-from agent.prompt import SYSTEM_PROMPT
-from agent.tools import (
-    verify_identity,
-    calculate_emi,
-    check_eligibility,
-    fetch_credit_report,
-    fetch_financial_profile,
-    generate_pre_approval,
-    search_loan_products
-)
+from agent.prompt import get_system_prompt
+from agent.tools import get_agent_tools
 from netra.decorators import agent
 from netra import Netra, ConversationType, SpanType, UsageModel
-from langgraph.runtime import Runtime
-from langchain.messages import AnyMessage
 import logging
 import re
 from langgraph.types import Overwrite
@@ -104,34 +94,36 @@ Return ONLY the corrected response text, nothing else.
     return None
 
 
-_agent = create_agent(
-    model=llm,
-    system_prompt=SYSTEM_PROMPT,
-    tools=[
-        verify_identity,
-        calculate_emi,
-        check_eligibility,
-        fetch_credit_report,
-        fetch_financial_profile,
-        generate_pre_approval,
-        search_loan_products
-    ],
-    checkpointer=InMemorySaver(),
-    middleware=[
-        verify_agent_response,
-        ModelRetryMiddleware(
-            max_delay=2,
-            max_retries=5
+_agent = None
+
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        _agent = create_agent(
+            model=llm,
+            system_prompt=get_system_prompt(),
+            tools=get_agent_tools(),
+            checkpointer=InMemorySaver(),
+            middleware=[
+                verify_agent_response,
+                ModelRetryMiddleware(
+                    max_delay=2,
+                    max_retries=5
+                )
+            ]
         )
-    ]
-)
-
-# @agent(name="Nova")
+    return _agent
 
 
-def get_response(prompt: str, thread_id: str, files: list[dict[str, str]] = []):
-    # IMPORTANT this method does not currently actually read the file, now it only infers from the file and its metadata.
-    # TODO: implement file reading and parsing
+def get_response(
+    prompt: str,
+    thread_id: str,
+    files: list[dict[str, str]] = [],
+    *,
+    scenario_intent: str | None = None,
+    scenario_sequence: str | None = None,
+):
     messages = [
         {
             "role": "user",
@@ -146,7 +138,7 @@ def get_response(prompt: str, thread_id: str, files: list[dict[str, str]] = []):
                 "content": f"I have uploaded a file named {file['filename']} with mimetype {file['mime_type']}"
             })
 
-    response = _agent.invoke({
+    response = _get_agent().invoke({
         "messages": messages
     }, {
         "configurable": {
@@ -154,43 +146,55 @@ def get_response(prompt: str, thread_id: str, files: list[dict[str, str]] = []):
         }
     })
 
-    # Pass the actual response messages which include middleware modifications
-    trace_conversation(thread_id, response["messages"])
+    trace_conversation(
+        thread_id,
+        response["messages"],
+        scenario_intent=scenario_intent,
+        scenario_sequence=scenario_sequence,
+    )
     return response["messages"][-1].text
 
 
 @agent(name="Nova Agent")
-def trace_conversation(thread_id: str, messages: list[AnyMessage] | None = None):
-    # Use provided messages or fetch from state
+def trace_conversation(
+    thread_id: str,
+    messages: list[AnyMessage] | None = None,
+    *,
+    scenario_intent: str | None = None,
+    scenario_sequence: str | None = None,
+):
     if messages is None:
-        messages = _agent.get_state({
+        messages = _get_agent().get_state({
             "configurable": {
                 "thread_id": thread_id
             }
         }).values["messages"]
 
-    # Type guard to ensure messages is not None
     assert messages is not None, "Messages should not be None"
 
     with Netra.start_span("Generation Pipeline", as_type=SpanType.GENERATION) as agent_span:
         Netra.set_session_id(thread_id)
-        Netra.set_user_id("Demo")
-        Netra.set_tenant_id("Nova")
+        Netra.set_user_id("Neethu")
+        Netra.set_tenant_id("Laura Inc.")
+
+        if scenario_intent is not None:
+            agent_span.set_attribute("scenario.intent", scenario_intent)
+        if scenario_sequence is not None:
+            agent_span.set_attribute("scenario.sequence", scenario_sequence)
 
         tool_calls = {}
 
-        # logging.info(f"{thread_id}: Processing system message: {SYSTEM_PROMPT}")
+        system_prompt_text = get_system_prompt()
         Netra.add_conversation(
             conversation_type=ConversationType.INPUT,
-            content=SYSTEM_PROMPT,
+            content=system_prompt_text,
             role="System"
         )
         agent_span.set_attribute("gen_ai.system.role", "system")
-        agent_span.set_attribute("gen_ai.system.content", SYSTEM_PROMPT)
+        agent_span.set_attribute("gen_ai.system.content", system_prompt_text)
 
         for i, message in enumerate(messages):
             if message.type == "human":
-                # logging.info(f"{thread_id}: Processing human message: {message.text}")
                 Netra.add_conversation(
                     conversation_type=ConversationType.INPUT,
                     content=message.text,
@@ -200,7 +204,6 @@ def trace_conversation(thread_id: str, messages: list[AnyMessage] | None = None)
                 agent_span.set_attribute(
                     f"gen_ai.prompt.{i}.content", message.text)
             elif message.type == "ai":
-                # logging.info(f"{thread_id}: Processing AI message: {message.text}")
                 agent_span.set_attribute(
                     f"gen_ai.completion.{i}.role", "assistant")
                 if len(message.text) > 0:
@@ -244,7 +247,6 @@ def trace_conversation(thread_id: str, messages: list[AnyMessage] | None = None)
                         role="Tool Call"
                     )
             elif message.type == "tool":
-                # logging.info(f"{thread_id}: Processing tool output: {message.content}")
                 tool_calls[message.tool_call_id]["output"] = message.content
 
                 with Netra.start_span(tool_calls[message.tool_call_id]["name"], as_type=SpanType.TOOL) as tool_span:

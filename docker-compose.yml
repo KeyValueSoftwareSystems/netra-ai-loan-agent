@@ -15,6 +15,7 @@ services:
       - LITELLM_API_KEY=${LITELLM_API_KEY}
     volumes:
       - ./backend/app:/app/app
+      - ./trace_logs:/app/trace_logs
     networks:
       - app-network
     healthcheck:

@@ -1,0 +1,55 @@
+{
+  "sequences_run": 3,
+  "total_turns": 3,
+  "prompt": null,
+  "tool_drift": false,
+  "intents_covered": [
+    "browse_loan_products",
+    "calculate_emi",
+    "verify_identity_pan"
+  ],
+  "threads": [
+    {
+      "thread_id": "trace-74298687-cluster_calculate_emi_s0",
+      "sequence": "cluster_calculate_emi_s0",
+      "turns": [
+        {
+          "turn": 1,
+          "intent": "calculate_emi",
+          "persona": "priya",
+          "user_message": "Hi Nova, could you help me calculate the monthly EMI for a personal loan of \u20b95,00,000 over 5 years?",
+          "agent_response": "I can help with that. Before proceeding, please provide your PAN, Aadhaar, or phone number for identity verification.",
+          "success": true
+        }
+      ]
+    },
+    {
+      "thread_id": "trace-74298687-cluster_browse_loan_products_s0",
+      "sequence": "cluster_browse_loan_products_s0",
+      "turns": [
+        {
+          "turn": 1,
+          "intent": "browse_loan_products",
+          "persona": "arjun",
+          "user_message": "Hi Nova, could you tell me about the different loan products Meridian Bank offers? I'm interested in learning about the interest rates and tenure options available.",
+          "agent_response": "I\u2019d be happy to help! To get started, I\u2019ll need to verify your identity\u2014could you please provide your PAN, Aadhaar, or phone number?",
+          "success": true
+        }
+      ]
+    },
+    {
+      "thread_id": "trace-74298687-cluster_verify_identity_pan_s0",
+      "sequence": "cluster_verify_identity_pan_s0",
+      "turns": [
+        {
+          "turn": 1,
+          "intent": "verify_identity_pan",
+          "persona": "arjun",
+          "user_message": "Hi Nova, I\u2019d like to verify my identity using my PAN card. The number is ABCPP9012X. Could you help me with that?",
+          "agent_response": "Your identity has been successfully verified using your PAN card. How much would you like to borrow and for how many years?",
+          "success": true
+        }
+      ]
+    }
+  ]
+}

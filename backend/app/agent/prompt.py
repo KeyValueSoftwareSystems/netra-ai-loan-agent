@@ -1,3 +1,13 @@
+"""System prompt for the Nova Loan Agent.
+
+Tries to fetch from Netra prompt management first;
+falls back to the hardcoded SYSTEM_PROMPT if Netra is unavailable.
+"""
+
+import logging
+
+from netra import Netra
+
 SYSTEM_PROMPT = """
 You are Nova, a personal loan assistant for Meridian Bank.
 You help customers verify their identity, check loan eligibility,
@@ -98,4 +108,26 @@ END OF SYSTEM PROMPT.
 
 
 def get_system_prompt() -> str:
+    """Return the system prompt.
+
+    Attempts to fetch the latest version from Netra prompt management
+    (name="Loan Agent Prompt", label="production"). If Netra is
+    unreachable or returns nothing usable, falls back to the hardcoded
+    SYSTEM_PROMPT above.
+    """
+    try:
+        prompt = Netra.prompts.get_prompt(
+            name="Loan Agent Prompt",
+            label="production",
+        )
+        if prompt and prompt.get("messages"):
+            for msg in prompt["messages"]:
+                if msg.get("role", "").lower() == "system":
+                    content = msg.get("content", "").strip()
+                    if content:
+                        logging.info("Using system prompt from Netra prompt management")
+                        return content
+    except (AttributeError, Exception) as e:
+        logging.warning(f"Netra prompt fetch failed ({e}), using hardcoded fallback")
+
     return SYSTEM_PROMPT

@@ -2,11 +2,15 @@
 
 Each function is a plain typed Python function with a docstring.
 Agno infers the tool schema from the function signature and docstring.
+Netra @task decorators create a TASK span per tool invocation.
 """
 
 import logging
 import math
 from datetime import date, timedelta
+
+from netra import Netra, SpanType
+from netra.decorators import task
 
 from db import (
     get_customer_by_identifier,
@@ -17,6 +21,7 @@ from db import (
 )
 
 
+@task
 def verify_identity(identifier_type: str, identifier_value: str) -> dict:
     """Verify customer identity using PAN, Aadhaar, or phone number. Must be called before any other tool.
 
@@ -34,6 +39,8 @@ def verify_identity(identifier_type: str, identifier_value: str) -> dict:
             logging.error(f"verify_identity - Customer not found: {identifier_type}={identifier_value}")
             return {"error": "Customer does not exist"}
 
+        Netra.set_user_id(customer["customer_id"])
+
         return {
             "verified": customer["verified"],
             "customer_id": customer["customer_id"],
@@ -46,6 +53,7 @@ def verify_identity(identifier_type: str, identifier_value: str) -> dict:
         return {"error": "An error occurred"}
 
 
+@task
 def fetch_credit_report(customer_id: str) -> dict:
     """Fetch credit score and loan history for a verified customer.
 
@@ -63,6 +71,7 @@ def fetch_credit_report(customer_id: str) -> dict:
         return {"error": "An error occurred"}
 
 
+@task
 def fetch_financial_profile(customer_id: str) -> dict:
     """Fetch income, employment, and banking details for a verified customer.
 
@@ -80,6 +89,7 @@ def fetch_financial_profile(customer_id: str) -> dict:
         return {"error": "An error occurred"}
 
 
+@task
 def search_loan_products(approved_amount: int, credit_score: int, employment_type: str) -> dict:
     """Search available loan products matching the customer's credit score.
 
@@ -96,6 +106,7 @@ def search_loan_products(approved_amount: int, credit_score: int, employment_typ
         return {"error": "An error occurred"}
 
 
+@task
 def check_eligibility(
     customer_id: str,
     credit_score: int,
@@ -116,68 +127,99 @@ def check_eligibility(
         employment_type: Type of employment.
         loan_tenure_months: Requested loan tenure in months.
     """
-    try:
-        customer = get_customer_by_id(customer_id)
-        if customer is None:
-            return {"error": "Customer does not exist"}
-
-        defaults = customer["defaults_last_3_years"]
-        dti = defaults / monthly_income if monthly_income > 0 else 0
-
-        eligible_products = sorted(
-            search_products_by_score(credit_score),
-            key=lambda p: p["max_amount"],
-        )
-        eligible_by_tenure = [
-            p for p in eligible_products
-            if loan_tenure_months in p["available_tenures_months"]
-        ]
-
-        appr_requested_amount = math.ceil(requested_amount / 100000) * 100000
-
-        payload = {
-            "eligible": True,
-            "max_approved_amount": 0,
-            "requested_amount": appr_requested_amount,
-            "debt_to_income_ratio": dti,
-            "rejection_reasons": [],
+    with Netra.start_span(
+        "Eligibility Decision (manually created span)",
+        as_type=SpanType.SPAN,
+        attributes={
+            "customer_id": customer_id,
+            "credit_score": str(credit_score),
+            "requested_amount": str(requested_amount),
+            "tenure_months": str(loan_tenure_months),
             "policy_version": "v3.2.1",
-        }
+        },
+    ) as decision_span:
+        try:
+            customer = get_customer_by_id(customer_id)
+            if customer is None:
+                decision_span.set_attribute("outcome", "customer_not_found")
+                decision_span.set_error("Customer does not exist")
+                return {"error": "Customer does not exist"}
 
-        if dti > 0.5:
-            payload["eligible"] = False
-            payload["rejection_reasons"].append(
-                f"Debt-to-income ratio of {dti} exceeds maximum of 0.50"
+            defaults = customer["defaults_last_3_years"]
+            dti = defaults / monthly_income if monthly_income > 0 else 0
+
+            eligible_products = sorted(
+                search_products_by_score(credit_score),
+                key=lambda p: p["max_amount"],
             )
+            eligible_by_tenure = [
+                p for p in eligible_products
+                if loan_tenure_months in p["available_tenures_months"]
+            ]
 
-        if len(eligible_products) == 0:
-            payload["eligible"] = False
-            payload["rejection_reasons"].append(
-                f"Credit score {credit_score} is below minimum threshold of 600"
+            appr_requested_amount = math.ceil(requested_amount / 100000) * 100000
+
+            payload = {
+                "eligible": True,
+                "max_approved_amount": 0,
+                "requested_amount": appr_requested_amount,
+                "debt_to_income_ratio": dti,
+                "rejection_reasons": [],
+                "policy_version": "v3.2.1",
+            }
+
+            if dti > 0.5:
+                payload["eligible"] = False
+                payload["rejection_reasons"].append(
+                    f"Debt-to-income ratio of {dti} exceeds maximum of 0.50"
+                )
+
+            if len(eligible_products) == 0:
+                payload["eligible"] = False
+                payload["rejection_reasons"].append(
+                    f"Credit score {credit_score} is below minimum threshold of 600"
+                )
+            else:
+                payload["max_approved_amount"] = min(
+                    appr_requested_amount, eligible_products[-1]["max_amount"]
+                )
+
+            if len(eligible_by_tenure) == 0:
+                payload["eligible"] = False
+                payload["rejection_reasons"].append(
+                    f"Requested tenure of {loan_tenure_months} months is not available."
+                )
+
+            if eligible_products and eligible_products[-1]["max_amount"] < requested_amount:
+                payload["eligible"] = False
+                payload["rejection_reasons"].append(
+                    f"Requested amount of Rs.{requested_amount} is more than the maximum loanable amount"
+                )
+
+            decision_span.set_attribute("eligible", str(payload["eligible"]))
+            decision_span.set_attribute("max_approved_amount", str(payload["max_approved_amount"]))
+            decision_span.set_attribute("debt_to_income_ratio", str(round(dti, 4)))
+            decision_span.set_attribute(
+                "rejection_reasons",
+                "; ".join(payload["rejection_reasons"]) or "none",
             )
-        else:
-            payload["max_approved_amount"] = min(
-                appr_requested_amount, eligible_products[-1]["max_amount"]
+            decision_span.set_attribute(
+                "qualifying_products",
+                ",".join(p["product_id"] for p in eligible_products) or "none",
             )
+            if payload["eligible"]:
+                decision_span.set_success()
+            else:
+                decision_span.set_attribute("outcome", "rejected")
 
-        if len(eligible_by_tenure) == 0:
-            payload["eligible"] = False
-            payload["rejection_reasons"].append(
-                f"Requested tenure of {loan_tenure_months} months is not available."
-            )
-
-        if eligible_products and eligible_products[-1]["max_amount"] < requested_amount:
-            payload["eligible"] = False
-            payload["rejection_reasons"].append(
-                f"Requested amount of Rs.{requested_amount} is more than the maximum loanable amount"
-            )
-
-        return payload
-    except Exception as e:
-        logging.error(f"check_eligibility - Unexpected error: {e}")
-        return {"error": "An error occurred"}
+            return payload
+        except Exception as e:
+            logging.error(f"check_eligibility - Unexpected error: {e}")
+            decision_span.set_error(str(e))
+            return {"error": "An error occurred"}
 
 
+@task
 def calculate_emi(principal: int, annual_rate_pct: float, tenure_months: int) -> dict:
     """Calculate exact EMI for a given loan amount, interest rate, and tenure using the standard amortization formula.
 
@@ -195,6 +237,7 @@ def calculate_emi(principal: int, annual_rate_pct: float, tenure_months: int) ->
         return {"error": "An error occurred"}
 
 
+@task
 def generate_pre_approval(
     customer_id: str,
     product_id: str,

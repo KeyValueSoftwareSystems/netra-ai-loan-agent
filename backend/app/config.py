@@ -9,5 +9,9 @@ class Environment(BaseSettings):
     OPENAI_API_KEY: str = Field()
     DATABASE_PATH: str = Field(default="data/nova.db")
 
+    # Netra observability
+    NETRA_API_KEY: str = Field()
+    NETRA_OTLP_ENDPOINT: str = Field(default="https://api.demo.getnetra.ai/telemetry")
+
 
 env = Environment()  # type: ignore
